@@ -1,12 +1,8 @@
-
-
-// routes/visitas.js
 const express = require('express');
 const router = express.Router();
 const { body, validationResult } = require('express-validator');
 const moment = require('moment');
 
-// Middleware de validación mejorado
 const validarVisita = [
   body('cedula')
     .isLength({ min: 6, max: 20 }).withMessage('Cédula inválida (6-20 caracteres)')
@@ -27,14 +23,52 @@ const validarVisita = [
   }
 ];
 
-// POST /visitas - Registro completo
+// Nuevo endpoint para buscar personas
+router.get('/buscar-persona', async (req, res) => {
+  const { cedula } = req.query;
+  
+  if (!cedula) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'Cédula requerida' 
+    });
+  }
+  
+  const connection = await req.pool.getConnection();
+  try {
+    const [personas] = await connection.execute(
+      'SELECT cedula, nombre, apellido, empresa FROM personas WHERE cedula = ?',
+      [cedula]
+    );
+    
+    if (personas.length > 0) {
+      res.json({
+        success: true,
+        data: personas[0]
+      });
+    } else {
+      res.json({
+        success: false,
+        message: 'Persona no encontrada'
+      });
+    }
+  } catch (error) {
+    console.error('Error al buscar persona:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Error interno del servidor'
+    });
+  } finally {
+    connection.release();
+  }
+});
+
 router.post('/', validarVisita, async (req, res) => {
   const connection = await req.pool.getConnection();
   try {
     await connection.beginTransaction();
     const { cedula, nombre, apellido, empresa, area, elementos_ingresa, autoriza_ingreso, placa } = req.body;
     
-    // 1. Upsert en personas
     await connection.execute(
       `INSERT INTO personas (cedula, nombre, apellido, empresa)
        VALUES (?, ?, ?, ?)
@@ -43,14 +77,12 @@ router.post('/', validarVisita, async (req, res) => {
       [cedula, nombre, apellido, empresa]
     );
 
-    // 2. Obtener personaId
     const [[personaRow]] = await connection.execute(
       'SELECT id FROM personas WHERE cedula = ?', 
       [cedula]
     );
     const personaId = personaRow.id;
 
-    // 3. Validación ARL mensual
     const inicioMes = moment.utc().startOf('month').format('YYYY-MM-DD');
     const finMes = moment.utc().endOf('month').format('YYYY-MM-DD');
     
@@ -68,7 +100,6 @@ router.post('/', validarVisita, async (req, res) => {
       });
     }
 
-    // 4. Validación EPS vigente
     const hoyUTC = moment.utc().format('YYYY-MM-DD');
     const [epsValida] = await connection.execute(
       `SELECT fecha_vencimiento FROM eps
@@ -85,14 +116,12 @@ router.post('/', validarVisita, async (req, res) => {
       });
     }
 
-    // 5. Registrar visita
     const [visita] = await connection.execute(
       `INSERT INTO visitas (persona_id, area, elementos_ingresa, autoriza_ingreso, placa)
        VALUES (?, ?, ?, ?, ?)`,
       [personaId, area, elementos_ingresa, autoriza_ingreso, placa]
     );
 
-    // 6. Obtener datos completos
     const [registroCompleto] = await connection.execute(
       `SELECT v.id, p.cedula, p.nombre, p.apellido, p.empresa,
               v.area, v.elementos_ingresa, v.autoriza_ingreso, v.placa,
@@ -125,7 +154,6 @@ router.post('/', validarVisita, async (req, res) => {
   }
 });
 
-// POST /arl - Registrar ARL
 router.post('/arl', [
   body('cedula').isLength({ min: 6, max: 20 }).withMessage('Cédula inválida'),
   body('mes_vigencia').isISO8601().withMessage('Fecha inválida'),
@@ -155,7 +183,6 @@ router.post('/arl', [
       personaId = personaRow.id;
     }
 
-    // Convertir a primer día del mes
     const primerDiaMes = moment.utc(mes_vigencia).startOf('month').format('YYYY-MM-DD');
 
     await connection.execute(
@@ -179,7 +206,6 @@ router.post('/arl', [
   }
 });
 
-// POST /eps - Registrar EPS (igual a ARL)
 router.post('/eps', [
   body('cedula').isLength({ min: 6, max: 20 }).withMessage('Cédula inválida'),
   body('fecha_vencimiento').isISO8601().withMessage('Fecha inválida'),
@@ -230,7 +256,6 @@ router.post('/eps', [
   }
 });
 
-// GET /visitas - Obtener visitas
 router.get('/', async (req, res) => {
   const connection = await req.pool.getConnection();
   try {
